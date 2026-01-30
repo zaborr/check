@@ -17,38 +17,48 @@ def ts(dt):
 
 @st.cache_data(ttl=3600)
 def get_top_20():
-    r = requests.get(
-        f"{BASE_URL}/coins/markets",
-        params={
-            "vs_currency": "usd",
-            "order": "market_cap_desc",
-            "per_page": 20,
-            "page": 1
-        },
-        timeout=20
-    )
-    r.raise_for_status()
-    return {c["id"]: c["symbol"].upper() for c in r.json()}
+    try:
+        r = requests.get(
+            f"{BASE_URL}/coins/markets",
+            params={
+                "vs_currency": "usd",
+                "order": "market_cap_desc",
+                "per_page": 20,
+                "page": 1
+            },
+            timeout=20
+        )
+        r.raise_for_status()
+        return {c["id"]: c["symbol"].upper() for c in r.json()}
+    except Exception:
+        return {}
 
 @st.cache_data(ttl=3600)
 def get_price_at(coin_id, dt):
-    r = requests.get(
-        f"{BASE_URL}/coins/{coin_id}/market_chart/range",
-        params={
-            "vs_currency": VS,
-            "from": ts(dt) - 1800,
-            "to": ts(dt) + 1800
-        },
-        timeout=20
-    )
-    r.raise_for_status()
+    try:
+        r = requests.get(
+            f"{BASE_URL}/coins/{coin_id}/market_chart/range",
+            params={
+                "vs_currency": VS,
+                "from": ts(dt) - 1800,
+                "to": ts(dt) + 1800
+            },
+            timeout=20
+        )
 
-    prices = r.json().get("prices", [])
-    if not prices:
+        # ❗ NO raise_for_status sin control
+        if r.status_code != 200:
+            return None
+
+        prices = r.json().get("prices", [])
+        if not prices:
+            return None
+
+        prices.sort(key=lambda x: abs(x[0] - ts(dt) * 1000))
+        return prices[0][1]
+
+    except Exception:
         return None
-
-    prices.sort(key=lambda x: abs(x[0] - ts(dt) * 1000))
-    return prices[0][1]
 
 # ---------------- UI ----------------
 
@@ -81,8 +91,12 @@ with st.sidebar:
 # ---------------- logic ----------------
 
 if run:
-    with st.spinner("Consultando CoinGecko y haciendo cuentas incómodas..."):
+    with st.spinner("Consultando CoinGecko (si coopera)..."):
         coins = get_top_20()
+        if not coins:
+            st.error("CoinGecko no respondió. Prueba en unos minutos.")
+            st.stop()
+
         coins[target_coin] = target_coin.upper()
 
         prices_1 = {}
@@ -133,13 +147,13 @@ if run:
 
         df = pd.DataFrame(rows).sort_values("% USD")
 
-        st.success("Cálculo terminado. Los números ya pueden juzgarte.")
+        st.success("Listo. CoinGecko no ha ganado esta vez.")
         st.dataframe(df, use_container_width=True)
 
         if skipped:
             st.warning(
-                f"Monedas omitidas por falta de datos horarios: "
-                f"{', '.join(skipped)}"
+                "Monedas omitidas por falta de datos o rate-limit:\n"
+                + ", ".join(skipped)
             )
 
         csv = df.to_csv(index=False).encode("utf-8")
